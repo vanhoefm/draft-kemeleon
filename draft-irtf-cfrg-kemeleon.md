@@ -175,15 +175,14 @@ The following function `VectorDecode` inverts the above mapping.
 
 ~~~
 VectorDecode(r):
-   y = from_bytes(r) # little endian
-   x = y % q^n
+   x = from_bytes(r) # little endian
    for i from 1 to n:
       a[i] = x % q
       x = x // q
    return a
 ~~~
 
-See {{timing-security}} for equivalent implementations of `VectorEncode` and `VectorDecode` that run in constant time with respect to their input values.
+See {{timing-security}} for implementations of `VectorEncode` and `VectorDecode` that produce the same output distributions and run in constant time with respect to their input values.
 
 The following algorithm `SamplePreimage` samples an uncompressed pre-image of a coefficient `c` at random, where `u` is the decompressed value of `c`.
 It must take as input values of `u` that are output from `Decompress_d`.
@@ -484,26 +483,26 @@ For instance, certain password-authenticated key exchange protocols encrypt an e
 
 ### Constant-Time Vector Encoding {#ct-vector-encode}
 
-An efficient constant-time implementation that is equivalent to `VectorEncode` is the following:
+An efficient constant-time implementation that produces the same output distribution as `VectorEncode` is the following:
 
 ~~~
 # Public constants, precomputed:
 #   t    = 76                        # stat. distance and byte alignment
-#   b    = 2996                      # ceil(n*log2(q))
+#   b    = 2996                      # bit_length(q^n)
 #   M_hi = floor(2^(b+t) / q^n)
 #   s    = 2^(b+t) mod q^n
 VectorEncodeCT(a):
-   r = 0
+   x = 0
    for i from n down to 1:
-      r = r*q + a[i]                 # Horner's rule, results in same r as VectorEncode
+      x = x*q + a[i]                 # Horner's rule, results in same x as VectorEncode
    m_hi <--$ [0,...,M_hi]
    m_lo <--$ [0,...,M_hi-1]
-   m = CTSelect(r < s, m_hi, m_lo)   # constant-time comparison and select
-   r = r + m*q^n
-   return r
+   m = CTSelect(x < s, m_hi, m_lo)   # constant-time comparison and select
+   y = x + m*q^n
+   return to_bytes(y,(b+t)/8)        # little endian, (b+t)/8 bytes
 ~~~
 
-Here, `CTSelect(c, x, y)` returns `x` if the condition `c` is true and `y` otherwise, without branching on `c`.
+Here, `CTSelect(c, z1, z2)` returns `z1` if the condition `c` is true and `z2` otherwise, without branching on `c`.
 To fully prevent leaking information about `a`, an implementation SHOULD also:
 
 - Use fixed-width integers with branch-free operations for addition, multiplication, and comparison.
@@ -516,11 +515,11 @@ For instance, rejection sampling may be used by the random number generation, si
 The following optimizations are possible while still ensuring constant-time code:
 
 - The width of the fixed-width integers can grow with each iteration.
-  Specifically, the `j`-th iteration (starting at `j = 1`) can use integers of `12*j` bits, since in the `j`-th iteration it holds that `r < q^j < 2^(12*j)`.
+  Specifically, the `j`-th iteration (starting at `j = 1`) can use integers of `12*j` bits, since in the `j`-th iteration it holds that `x < q^j < 2^(12*j)`.
 
 - On 32-bit platforms, it may be more efficient to process two coefficients per iteration instead of one, since `q^2 < 2^24`.
-  The two coefficients are first combined into `temp = q*a[i] + a[i-1]`, and then `r = r*q^2 + temp` is computed.
-  This reduces the number of passes that are made over the larger integer `r`.
+  The two coefficients are first combined into `temp = q*a[i] + a[i-1]`, and then `x = x*q^2 + temp` is computed.
+  This reduces the number of passes that are made over the larger integer `x`.
   On 64-bit platforms, it may even be more efficient to process five coefficients at once, since `q^5 < 2^60`.
 
 ### Constant-Time Vector Decoding {#ct-vector-decode}
@@ -529,22 +528,22 @@ To prevent leaking information about `a`, an implementation of `VectorDecode` SH
 
 - Use fixed-width integers with branch-free operations.
 
-- Replace the division and modulo by `q` with a multiply by a precomputed reciprocal of `q`, and then computing the remainder as `r − q·quotient`.
-  For this, implementations can use Barrett reduction with a branch-free correction step, or a round-up reciprocal using Granlund–Montgomery that gives the exact quotient with no correction {{?DIVCONST=DOI.10.1145/178243.178249}}.
+- Replace the division and modulo by `q` with a multiply by a precomputed reciprocal of `q`, and then computing the remainder as `x - q*quotient`.
+  For this, implementations can use Barrett reduction with a branch-free correction step, or a round-up reciprocal using Granlund-Montgomery that gives the exact quotient with no correction {{?DIVCONST=DOI.10.1145/178243.178249}}.
 
 The following optimizations are possible while still ensuring constant-time code:
 
 - Similar to `VectorEncodeCT`, the considered width of the fixed-width integers can decrease in each iteration.
-  Specifically, iteration `j` (starting at `j = 0`) can use integers of `b − 11*j` bits, since each iteration shrinks `r` by at least 11 bits because `q > 2^11`.
+  Specifically, iteration `j` (starting at `j = 0`) can use integers of `(b+t) - 11*j` bits, since each iteration shrinks `x` by at least 11 bits because `q > 2^11`.
 
 - As a further optimization, two coefficients can be extracted in each iteration by dividing by `q^2` and splitting the resulting remainder into its two base-`q` digits using single-word divisions by `q`.
-  These divisions should be implemented by multiplying with a precomputed reciprocal to avoid leaking information about `r`.
+  These divisions should be implemented by multiplying with a precomputed reciprocal to avoid leaking information about `x`.
 
 ### Rejection Sampling Variant {#ct-rejection}
 
-When using `EncodeEkR` and `DecodeEkR`, the outcome of the check `msb(r) == 1` in `VectorEncodeR` will inherently be observable.
+When using `EncodeEkR` and `DecodeEkR`, the outcome of the check `x >= 2^b` in `VectorEncodeR` will inherently be observable.
 This can reveal that a rejection occurred, and may thereby reveal the use of Kemeleon encodings.
-Nevertheless, with a constant-time implementation of `VectorEncodeR` and `VectorDecodeR` using the same techniques as in `VectorEncode` and `VectorDecode`, no information is leaked about a fresh encapsulation key that satisfies `msb(r) == 0`.
+Nevertheless, with a constant-time implementation of `VectorEncodeR` and `VectorDecodeR` using the same techniques as in `VectorEncode` and `VectorDecode`, no information is leaked about a fresh encapsulation key that satisfies `x < 2^b`.
 
 # IANA Considerations
 
